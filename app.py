@@ -51,7 +51,6 @@ mqtt_client = mqtt.Client()
 
 def on_connect(client, userdata, flags, rc):
     print(f"Flask-сервер подключен к MQTT брокеру с кодом: {rc}")
-    # Подписываемся на топик от ESP, чтобы слушать прикладывание карт
     client.subscribe(TOPIC_RFID)
     print(f"Подписались на топик: {TOPIC_RFID}")
 
@@ -69,12 +68,10 @@ def on_message(client, userdata, msg):
         recipient_user = users_collection.find_one({"username": recipient_name})
         
         if recipient_user:
-            # Сверяем RFID получателя из БД с присланной картой
             correct_rfid = recipient_user.get("rfid", "").strip().upper()
             if payload == correct_rfid:
                 print(">>> RFID карта верна! Отправляем команду OPEN роботу...")
                 delivery_status["stage"] = "opened"
-                # Отправляем физическую команду на ESP открыть замок
                 mqtt_client.publish(TOPIC_CONTROL, "OPEN")
             else:
                 print(f">>> Карта не совпала. Ждали: {correct_rfid}, получили: {payload}")
@@ -84,7 +81,6 @@ def on_message(client, userdata, msg):
 mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
 
-# Запускаем MQTT клиент в отдельном фоновом потоке, чтобы он не блокировал Flask-сайт
 def start_mqtt():
     try:
         mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
@@ -104,7 +100,6 @@ def simulate_travel():
         time.sleep(1)
         delivery_status["eta"] -= 1
     
-    # Когда время таймера вышло, робот "прибыл" и ждет карту на ESP
     delivery_status["stage"] = "waiting_card"
     print("Робот прибыл в пункт назначения. Ожидание RFID карты...")
 
@@ -194,37 +189,167 @@ DASHBOARD_HTML = """
     <title>Панель управления - PromLogix</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     {% if delivery_active and (stage == 'moving' or stage == 'waiting_card') %}
-    <!-- Если идет доставка, страница автоматически обновляется каждые 3 секунды -->
     <meta http-equiv="refresh" content="3">
     {% endif %}
     <style>
-        body { font-family: Arial, sans-serif; background-color: #f4f6f9; margin: 0; padding: 20px; }
-        .container { max-width: 800px; margin: 0 auto; }
-        .header { display: flex; justify-content: space-between; align-items: center; background: white; padding: 15px 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); margin-bottom: 20px; }
-        .header h1 { margin: 0; font-size: 24px; color: #333; }
-        .logout-btn { background: #dc3545; color: white; padding: 8px 15px; text-decoration: none; border-radius: 4px; }
-        .card { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); margin-bottom: 20px; }
-        h3 { margin-top: 0; color: #007bff; border-bottom: 2px solid #eee; padding-bottom: 10px; }
-        .info-row { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 16px; }
-        .info-label { font-weight: bold; color: #555; }
-        select, button { width: 100%; padding: 12px; margin-top: 10px; border-radius: 4px; box-sizing: border-box; }
-        select { border: 1px solid #ccc; font-size: 16px; }
-        .btn-send { background: #007bff; color: white; border: none; font-size: 16px; cursor: pointer; }
-        .btn-send:hover { background: #0056b3; }
-        .btn-reset { background: #ffc107; color: #212529; border: none; font-size: 16px; cursor: pointer; margin-top: 15px; }
-        .status-box { padding: 15px; border-radius: 6px; font-weight: bold; text-align: center; font-size: 18px; margin-top: 15px; }
+        body { 
+            font-family: Arial, sans-serif; 
+            background-color: #f4f6f9; 
+            margin: 0; 
+            padding: 15px; 
+        }
+        .container { 
+            max-width: 800px; 
+            margin: 0 auto; 
+        }
+        
+        /* ШАПКА С АДАПТИВНОСТЬЮ */
+        .header { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            background: white; 
+            padding: 15px 20px; 
+            border-radius: 8px; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05); 
+            margin-bottom: 20px; 
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+        .header h1 { 
+            margin: 0; 
+            font-size: 22px; 
+            color: #333; 
+        }
+        .header-user-block {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+        .logout-btn { 
+            background: #dc3545; 
+            color: white; 
+            padding: 8px 15px; 
+            text-decoration: none; 
+            border-radius: 4px; 
+            white-space: nowrap; 
+            font-size: 14px;
+        }
+        
+        .card { 
+            background: white; 
+            padding: 20px; 
+            border-radius: 8px; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05); 
+            margin-bottom: 20px; 
+        }
+        h3 { 
+            margin-top: 0; 
+            color: #007bff; 
+            border-bottom: 2px solid #eee; 
+            padding-bottom: 10px; 
+            font-size: 18px;
+        }
+        
+        /* АДАПТИВНЫЕ СТРОКИ С ДАННЫМИ */
+        .info-row { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center;
+            margin-bottom: 10px; 
+            font-size: 15px; 
+            gap: 10px;
+            flex-wrap: wrap; 
+        }
+        .info-label { 
+            font-weight: bold; 
+            color: #555; 
+        }
+        .rfid-badge {
+            font-family: monospace; 
+            font-size: 16px; 
+            background: #eee; 
+            padding: 4px 10px; 
+            border-radius: 4px;
+            white-space: nowrap; 
+        }
+        
+        select, button { 
+            width: 100%; 
+            padding: 12px; 
+            margin-top: 10px; 
+            border-radius: 4px; 
+            box-sizing: border-box; 
+        }
+        select { 
+            border: 1px solid #ccc; 
+            font-size: 16px; 
+            background-color: white;
+        }
+        .btn-send { 
+            background: #007bff; 
+            color: white; 
+            border: none; 
+            font-size: 16px; 
+            cursor: pointer; 
+        }
+        .btn-send:hover { 
+            background: #0056b3; 
+        }
+        .btn-reset { 
+            background: #ffc107; 
+            color: #212529; 
+            border: none; 
+            font-size: 16px; 
+            cursor: pointer; 
+            margin-top: 15px; 
+        }
+        .status-box { 
+            padding: 15px; 
+            border-radius: 6px; 
+            font-weight: bold; 
+            text-align: center; 
+            font-size: 16px; 
+            margin-top: 15px; 
+        }
         .status-idle { background: #e2e3e5; color: #383d41; }
         .status-moving { background: #cce5ff; color: #004085; }
         .status-waiting { background: #fff3cd; color: #856404; }
         .status-opened { background: #d4edda; color: #155724; }
+
+        /* МОБИЛЬНЫЕ СТИЛИ (Для экранов узких мобильных устройств) */
+        @media (max-width: 480px) {
+            .header {
+                flex-direction: column;
+                align-items: flex-start;
+                padding: 15px;
+            }
+            .header-user-block {
+                width: 100%;
+                justify-content: space-between;
+                align-items: center;
+            }
+            .info-row {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 5px;
+            }
+            .rfid-badge {
+                width: 100%;
+                box-sizing: border-box;
+                text-align: center;
+            }
+        }
     </style>
 </head>
 <body>
     <div class="container">
+        <!-- ОБНОВЛЕННАЯ ШАПКА -->
         <div class="header">
             <h1>Личный кабинет</h1>
-            <div>
-                <span style="margin-right: 15px;">Привет, <strong>{{ username }}</strong>!</span>
+            <div class="header-user-block">
+                <span>Привет, <strong>{{ username }}</strong>!</span>
                 <a href="/logout" class="logout-btn">Выйти</a>
             </div>
         </div>
@@ -234,7 +359,7 @@ DASHBOARD_HTML = """
             <h3>Ваши данные</h3>
             <div class="info-row">
                 <span class="info-label">Ваш RFID UID карты:</span>
-                <span style="font-family: monospace; font-size: 18px; background: #eee; padding: 2px 8px; border-radius: 4px;">{{ user_rfid }}</span>
+                <span class="rfid-badge">{{ user_rfid }}</span>
             </div>
             <p style="font-size: 13px; color: #666; margin-bottom: 0;">* Эту карту вы должны прикладывать к ESP, чтобы забрать предназначенную вам деталь.</p>
         </div>
@@ -317,7 +442,6 @@ def login():
         username = request.form['username'].strip().lower()
         password = request.form['password']
         
-        # Поиск пользователя в MongoDB Atlas
         user_doc = users_collection.find_one({"username": username})
         
         if user_doc and user_doc["password"] == password:
@@ -336,13 +460,11 @@ def register():
         password = request.form['password']
         rfid = request.form.get('rfid', '').strip().upper()
         
-        # Проверка, существует ли пользователь в MongoDB
         existing_user = users_collection.find_one({"username": username})
         
         if existing_user:
             error = "Этот логин уже занят!"
         else:
-            # Если RFID не введен, генерируем случайный
             if not rfid or rfid == "00 00 00 00":
                 bytes_list = []
                 for _ in range(4):
@@ -351,7 +473,6 @@ def register():
                     bytes_list.append(hex_byte)
                 rfid = " ".join(bytes_list)
 
-            # Сохраняем нового юзера в MongoDB
             users_collection.insert_one({
                 "username": username,
                 "password": password,
@@ -370,11 +491,9 @@ def dashboard():
         
     username = session['username']
     
-    # Получаем данные текущего пользователя из MongoDB
     current_user_doc = users_collection.find_one({"username": username})
     user_rfid = current_user_doc.get("rfid", "Не назначен") if current_user_doc else "Не назначен"
     
-    # Получаем список ВСЕХ пользователей из MongoDB для формы отправки
     all_users = [doc["username"] for doc in users_collection.find()]
     
     return render_template_string(
@@ -400,22 +519,19 @@ def send_robot():
         sender = session['username']
         
         if recipient:
-            # 1. Задаем параметры новой доставки
             delivery_status["active"] = True
             delivery_status["sender"] = sender
             delivery_status["recipient"] = recipient
             delivery_status["stage"] = "moving"
-            delivery_status["eta"] = 10  # 10 секунд на симуляцию пути до получателя
+            delivery_status["eta"] = 10  
             delivery_status["scanned_rfid"] = None
             
-            # 2. Публикуем команду "GO" для ESP-платы
             try:
                 mqtt_client.publish(TOPIC_CONTROL, "GO")
                 print(f">>> MQTT Команда 'GO' отправлена в топик {TOPIC_CONTROL}")
             except Exception as e:
                 print(f"Ошибка отправки MQTT: {e}")
             
-            # 3. Запускаем таймер поездки в фоне
             travel_thread = threading.Thread(target=simulate_travel)
             travel_thread.start()
             
@@ -427,7 +543,6 @@ def reset_robot():
         return redirect(url_for('login'))
         
     global delivery_status
-    # Сбрасываем статус робота в исходное состояние свободы
     delivery_status = {
         "active": False,
         "sender": None,
@@ -447,7 +562,6 @@ def logout():
 # 7. ЗАПУСК
 # ==========================================
 if __name__ == '__main__':
-    # На Render порт задается переменной окружения PORT, по умолчанию используем 5000
     import os
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
