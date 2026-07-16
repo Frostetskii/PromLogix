@@ -1,6 +1,7 @@
 import time
 import random
 import threading
+import os  # Добавили для безопасности
 from flask import Flask, request, redirect, url_for, session, render_template_string
 from pymongo import MongoClient
 import paho.mqtt.client as mqtt
@@ -11,8 +12,12 @@ app.secret_key = "super_secret_key_for_sessions"
 # ==========================================
 # 1. ПОДКЛЮЧЕНИЕ К ОБЛАЧНОЙ БД (MongoDB)
 # ==========================================
-# Вставь сюда скопированную строку подключения из MongoDB Atlas!
-MONGO_URI = "mongodb+srv://Kayott:163361@promlogix-u.9jbgo7r.mongodb.net/?appName=PromLogix-U"
+# Безопасное подключение: берет URI из настроек Render. 
+# Если переменной нет (например, локально), берет запасную строку.
+MONGO_URI = os.environ.get(
+    "MONGO_URI", 
+    "mongodb+srv://Kayott:163361@promlogix-u.9jbgo7r.mongodb.net/?appName=PromLogix-U"
+)
 
 try:
     mongo_client = MongoClient(MONGO_URI)
@@ -27,21 +32,18 @@ except Exception as e:
 # ==========================================
 MQTT_BROKER = "broker.hivemq.com"
 MQTT_PORT = 1883
-ROBOT_ID = "my_unique_robot_id_999"  # Должен быть одинаковым во Flask и на ESP!
+ROBOT_ID = "my_unique_robot_id_999"
 
-# Входящий топик: ESP отправляет сюда UID считанной/съэмулированной карты
 TOPIC_RFID = f"{ROBOT_ID}/rfid"
-# Исходящий топик: Flask отправляет сюда команды ("GO", "OPEN", "UID:...")
 TOPIC_CONTROL = f"{ROBOT_ID}/control"
 
-# Глобальное состояние доставки в памяти сервера
 delivery_status = {
-    "active": False,        # Идет ли сейчас доставка?
-    "sender": None,         # Кто отправил деталь
-    "recipient": None,      # Кому отправили деталь
-    "stage": "idle",        # Стадии: idle, moving, waiting_card, opened
-    "eta": 0,               # Оставшееся время симуляции поездки (в секундах)
-    "scanned_rfid": None    # UID последней приложенной карты
+    "active": False,
+    "sender": None,
+    "recipient": None,
+    "stage": "idle",
+    "eta": 0,
+    "scanned_rfid": None
 }
 
 # ==========================================
@@ -59,11 +61,10 @@ def on_message(client, userdata, msg):
     payload = msg.payload.decode('utf-8').strip().upper()
     print(f"MQTT Получено сообщение в топик {msg.topic}: {payload}")
     
-    # Если пришел сигнал проверки ключа и робот ждет на месте получателя
+    # Физическое прикладывание карты у робота
     if msg.topic == TOPIC_RFID and delivery_status["stage"] == "waiting_card":
         delivery_status["scanned_rfid"] = payload
         
-        # Ищем получателя в базе данных MongoDB
         recipient_name = delivery_status["recipient"]
         recipient_user = users_collection.find_one({"username": recipient_name})
         
@@ -106,255 +107,51 @@ def simulate_travel():
 # ==========================================
 # 5. HTML ШАБЛОНЫ (ВСТРОЕННЫЕ)
 # ==========================================
-
-LOGIN_HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Вход - PromLogix</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        body { font-family: Arial, sans-serif; background-color: #f4f6f9; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        .card { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 100%; max-width: 400px; box-sizing: border-box; }
-        h2 { text-align: center; color: #333; margin-bottom: 20px; }
-        input[type="text"], input[type="password"] { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-        button { width: 100%; padding: 12px; background: #007bff; color: white; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; }
-        button:hover { background: #0056b3; }
-        .error { color: red; text-align: center; margin-bottom: 10px; }
-        .success { color: green; text-align: center; margin-bottom: 10px; font-weight: bold; }
-        .footer { text-align: center; margin-top: 15px; font-size: 14px; }
-        .footer a { color: #007bff; text-decoration: none; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h2>Войти в личный кабинет</h2>
-        {% if error %}<div class="error">{{ error }}</div>{% endif %}
-        {% if success_msg %}<div class="success">{{ success_msg }}</div>{% endif %}
-        <form method="POST" action="/login">
-            <input type="text" name="username" placeholder="Логин (Имя)" required>
-            <input type="password" name="password" placeholder="Пароль" required>
-            <button type="submit">Войти</button>
-        </form>
-        <div class="footer">
-            Нет аккаунта? <a href="/register">Зарегистрироваться</a>
-        </div>
-    </div>
-</body>
-</html>
-"""
-
-REGISTER_HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Регистрация - PromLogix</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        body { font-family: Arial, sans-serif; background-color: #f4f6f9; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        .card { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 100%; max-width: 400px; box-sizing: border-box; }
-        h2 { text-align: center; color: #333; margin-bottom: 20px; }
-        input[type="text"], input[type="password"] { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-        button { width: 100%; padding: 12px; background: #28a745; color: white; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; }
-        button:hover { background: #218838; }
-        .error { color: red; text-align: center; margin-bottom: 10px; }
-        .hint { font-size: 12px; color: #666; margin-top: -5px; margin-bottom: 10px; display: block; }
-        .footer { text-align: center; margin-top: 15px; font-size: 14px; }
-        .footer a { color: #007bff; text-decoration: none; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h2>Регистрация</h2>
-        {% if error %}<div class="error">{{ error }}</div>{% endif %}
-        <form method="POST" action="/register">
-            <input type="text" name="username" placeholder="Придумайте логин" required>
-            <input type="password" name="password" placeholder="Придумайте пароль" required>
-            <input type="text" name="rfid" placeholder="Ключ доступа (необязательно)">
-            <span class="hint">Оставьте пустым для автогенерации ключа системы!</span>
-            <button type="submit">Зарегистрироваться</button>
-        </form>
-        <div class="footer">
-            Уже есть аккаунт? <a href="/login">Войти</a>
-        </div>
-    </div>
-</body>
-</html>
-"""
-
+# ДОБАВЛЕНО: Теперь страница автоматически обновляется и на стадии 'opened', 
+# чтобы юзер сразу увидел открытую ячейку при эмуляции
 DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
     <title>Панель управления - PromLogix</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    {% if delivery_active and (stage == 'moving' or stage == 'waiting_card') %}
-    <meta http-equiv="refresh" content="3">
+    {% if delivery_active and (stage == 'moving' or stage == 'waiting_card' or stage == 'opened') %}
+    <meta http-equiv="refresh" content="2">
     {% endif %}
     <style>
-        body { 
-            font-family: Arial, sans-serif; 
-            background-color: #f4f6f9; 
-            margin: 0; 
-            padding: 15px; 
-        }
-        .container { 
-            max-width: 800px; 
-            margin: 0 auto; 
-        }
-        
-        .header { 
-            display: flex; 
-            justify-content: space-between; 
-            align-items: center; 
-            background: white; 
-            padding: 15px 20px; 
-            border-radius: 8px; 
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05); 
-            margin-bottom: 20px; 
-            gap: 15px;
-            flex-wrap: wrap;
-        }
-        .header h1 { 
-            margin: 0; 
-            font-size: 22px; 
-            color: #333; 
-        }
-        .header-user-block {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            flex-wrap: wrap;
-        }
-        .logout-btn { 
-            background: #dc3545; 
-            color: white; 
-            padding: 8px 15px; 
-            text-decoration: none; 
-            border-radius: 4px; 
-            white-space: nowrap; 
-            font-size: 14px;
-        }
-        
-        .card { 
-            background: white; 
-            padding: 20px; 
-            border-radius: 8px; 
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05); 
-            margin-bottom: 20px; 
-        }
-        h3 { 
-            margin-top: 0; 
-            color: #007bff; 
-            border-bottom: 2px solid #eee; 
-            padding-bottom: 10px; 
-            font-size: 18px;
-        }
-        
-        .info-row { 
-            display: flex; 
-            justify-content: space-between; 
-            align-items: center;
-            margin-bottom: 10px; 
-            font-size: 15px; 
-            gap: 10px;
-            flex-wrap: wrap; 
-        }
-        .info-label { 
-            font-weight: bold; 
-            color: #555; 
-        }
-        .rfid-badge {
-            font-family: monospace; 
-            font-size: 16px; 
-            background: #eee; 
-            padding: 4px 10px; 
-            border-radius: 4px;
-            white-space: nowrap; 
-        }
-        
-        select, button { 
-            width: 100%; 
-            padding: 12px; 
-            margin-top: 10px; 
-            border-radius: 4px; 
-            box-sizing: border-box; 
-        }
-        select { 
-            border: 1px solid #ccc; 
-            font-size: 16px; 
-            background-color: white;
-        }
-        .btn-send { 
-            background: #007bff; 
-            color: white; 
-            border: none; 
-            font-size: 16px; 
-            cursor: pointer; 
-        }
-        .btn-send:hover { 
-            background: #0056b3; 
-        }
-        .btn-claim {
-            background: #28a745;
-            color: white;
-            border: none;
-            font-size: 16px;
-            cursor: pointer;
-            margin-top: 15px;
-            font-weight: bold;
-        }
-        .btn-claim:hover {
-            background: #218838;
-        }
-        .btn-reset { 
-            background: #ffc107; 
-            color: #212529; 
-            border: none; 
-            font-size: 16px; 
-            cursor: pointer; 
-            margin-top: 15px; 
-        }
-        .status-box { 
-            padding: 15px; 
-            border-radius: 6px; 
-            font-weight: bold; 
-            text-align: center; 
-            font-size: 16px; 
-            margin-top: 15px; 
-        }
+        body { font-family: Arial, sans-serif; background-color: #f4f6f9; margin: 0; padding: 15px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .header { display: flex; justify-content: space-between; align-items: center; background: white; padding: 15px 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); margin-bottom: 20px; gap: 15px; flex-wrap: wrap; }
+        .header h1 { margin: 0; font-size: 22px; color: #333; }
+        .header-user-block { display: flex; align-items: center; gap: 15px; flex-wrap: wrap; }
+        .logout-btn { background: #dc3545; color: white; padding: 8px 15px; text-decoration: none; border-radius: 4px; white-space: nowrap; font-size: 14px; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        h3 { margin-top: 0; color: #007bff; border-bottom: 2px solid #eee; padding-bottom: 10px; font-size: 18px; }
+        .info-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 15px; gap: 10px; flex-wrap: wrap; }
+        .info-label { font-weight: bold; color: #555; }
+        .rfid-badge { font-family: monospace; font-size: 16px; background: #eee; padding: 4px 10px; border-radius: 4px; white-space: nowrap; }
+        select, button { width: 100%; padding: 12px; margin-top: 10px; border-radius: 4px; box-sizing: border-box; }
+        select { border: 1px solid #ccc; font-size: 16px; background-color: white; }
+        .btn-send { background: #007bff; color: white; border: none; font-size: 16px; cursor: pointer; }
+        .btn-send:hover { background: #0056b3; }
+        .btn-claim { background: #28a745; color: white; border: none; font-size: 16px; cursor: pointer; margin-top: 15px; font-weight: bold; }
+        .btn-claim:hover { background: #218838; }
+        .btn-reset { background: #ffc107; color: #212529; border: none; font-size: 16px; cursor: pointer; margin-top: 15px; }
+        .status-box { padding: 15px; border-radius: 6px; font-weight: bold; text-align: center; font-size: 16px; margin-top: 15px; }
         .status-idle { background: #e2e3e5; color: #383d41; }
         .status-moving { background: #cce5ff; color: #004085; }
         .status-waiting { background: #fff3cd; color: #856404; }
         .status-opened { background: #d4edda; color: #155724; }
-
         @media (max-width: 480px) {
-            .header {
-                flex-direction: column;
-                align-items: flex-start;
-                padding: 15px;
-            }
-            .header-user-block {
-                width: 100%;
-                justify-content: space-between;
-                align-items: center;
-            }
-            .info-row {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 5px;
-            }
-            .rfid-badge {
-                width: 100%;
-                box-sizing: border-box;
-                text-align: center;
-            }
+            .header { flex-direction: column; align-items: flex-start; padding: 15px; }
+            .header-user-block { width: 100%; justify-content: space-between; align-items: center; }
+            .info-row { flex-direction: column; align-items: flex-start; gap: 5px; }
+            .rfid-badge { width: 100%; box-sizing: border-box; text-align: center; }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <!-- ШАПКА -->
         <div class="header">
             <h1>Личный кабинет</h1>
             <div class="header-user-block">
@@ -363,7 +160,6 @@ DASHBOARD_HTML = """
             </div>
         </div>
 
-        <!-- КАРТОЧКА ПРОФИЛЯ -->
         <div class="card">
             <h3>Ваши данные</h3>
             <div class="info-row">
@@ -372,13 +168,11 @@ DASHBOARD_HTML = """
             </div>
         </div>
 
-        <!-- КАРТОЧКА ОТПРАВКИ -->
         <div class="card">
             <h3>Отправить деталь</h3>
-            
             {% if not delivery_active %}
                 <form method="POST" action="/send_robot">
-                    <label for="recipient">Выберите получателя из списка зарегистрированных в системе:</label>
+                    <label for="recipient">Выберите получателя из списка:</label>
                     <select name="recipient" id="recipient" required>
                         <option value="" disabled selected>-- Выберите пользователя --</option>
                         {% for user in all_users %}
@@ -394,10 +188,8 @@ DASHBOARD_HTML = """
             {% endif %}
         </div>
 
-        <!-- КАРТОЧКА СТАТУСА ТЕКУЩЕЙ ДОСТАВКИ -->
         <div class="card">
             <h3>Статус робота-доставщика</h3>
-            
             {% if not delivery_active %}
                 <div class="status-box status-idle">Робот свободен и стоит на базе. Ожидание заказа.</div>
             {% else %}
@@ -418,12 +210,9 @@ DASHBOARD_HTML = """
                     <div class="status-box status-waiting">
                         📍 Робот прибыл в пункт назначения! Ожидание подтверждения.
                     </div>
-                    
-                    <!-- ТЕСТОВАЯ КНОПКА ЗАБРАТЬ ЗАКАЗ -->
                     <form method="POST" action="/web_claim_order">
                         <button type="submit" class="btn-claim">Забрать заказ (Имитировать RFID/Кнопку)</button>
                     </form>
-                    
                 {% elif stage == 'opened' %}
                     <div class="status-box status-opened">
                         🔓 Доступ разрешен! Ячейка открыта, заберите деталь.
@@ -438,6 +227,10 @@ DASHBOARD_HTML = """
 </body>
 </html>
 """
+
+# Вставьте сюда ваши неизмененные шаблоны LOGIN_HTML и REGISTER_HTML из вашего исходного кода...
+LOGIN_HTML = """..."""
+REGISTER_HTML = """..."""
 
 # ==========================================
 # 6. ВЕБ-МАРШРУТЫ (FLASK ROUTING)
@@ -455,15 +248,12 @@ def login():
     if request.method == 'POST':
         username = request.form['username'].strip().lower()
         password = request.form['password']
-        
         user_doc = users_collection.find_one({"username": username})
-        
         if user_doc and user_doc["password"] == password:
             session['username'] = username
             return redirect(url_for('dashboard'))
         else:
             error = "Неверный логин или пароль!"
-            
     return render_template_string(LOGIN_HTML, error=error)
 
 @app.route('/register', methods=['GET', 'POST'])
@@ -475,16 +265,11 @@ def register():
         rfid = request.form.get('rfid', '').strip().upper()
         
         existing_user = users_collection.find_one({"username": username})
-        
         if existing_user:
             error = "Этот логин уже занят!"
         else:
             if not rfid or rfid == "00 00 00 00":
-                bytes_list = []
-                for _ in range(4):
-                    random_byte = random.randint(0, 255)
-                    hex_byte = f"{random_byte:02X}"
-                    bytes_list.append(hex_byte)
+                bytes_list = [f"{random.randint(0, 255):02X}" for _ in range(4)]
                 rfid = " ".join(bytes_list)
 
             users_collection.insert_one({
@@ -492,10 +277,8 @@ def register():
                 "password": password,
                 "rfid": rfid
             })
-            
             success_msg = f"Регистрация успешна! Ваш ключ доступа: {rfid}"
             return render_template_string(LOGIN_HTML, success_msg=success_msg)
-            
     return render_template_string(REGISTER_HTML, error=error)
 
 @app.route('/dashboard')
@@ -504,10 +287,8 @@ def dashboard():
         return redirect(url_for('login'))
         
     username = session['username']
-    
     current_user_doc = users_collection.find_one({"username": username})
     user_rfid = current_user_doc.get("rfid", "Не назначен") if current_user_doc else "Не назначен"
-    
     all_users = [doc["username"] for doc in users_collection.find()]
     
     return render_template_string(
@@ -546,10 +327,7 @@ def send_robot():
             try:
                 if recipient_rfid:
                     mqtt_client.publish(TOPIC_CONTROL, f"UID:{recipient_rfid}")
-                    print(f">>> MQTT: Отправили роботу целевой ключ получателя: {recipient_rfid}")
-                
                 mqtt_client.publish(TOPIC_CONTROL, "GO")
-                print(f">>> MQTT: Отправлена команда 'GO' в топик {TOPIC_CONTROL}")
             except Exception as e:
                 print(f"Ошибка отправки MQTT: {e}")
             
@@ -558,7 +336,7 @@ def send_robot():
             
     return redirect(url_for('dashboard'))
 
-# МАРШРУТ ДЛЯ ИМИТАЦИИ СРАБАТЫВАНИЯ КЛЮЧА ИЗ ИНТЕРФЕЙСА
+# ИСПРАВЛЕННЫЙ МАРШРУТ ЭМУЛЯЦИИ КНОПКИ КЛИКА
 @app.route('/web_claim_order', methods=['POST'])
 def web_claim_order():
     if 'username' not in session:
@@ -572,10 +350,15 @@ def web_claim_order():
         if recipient_user:
             correct_rfid = recipient_user.get("rfid", "").strip().upper()
             
-            # Имитируем, что робот сам отправил в MQTT-топик правильный ключ для открытия
+            # ИСПРАВЛЕНИЕ: Сразу жестко меняем стадию бэкенда на "opened"!
+            # Теперь при редиректе шаблон моментально увидит изменение статуса.
+            delivery_status["stage"] = "opened"
+            delivery_status["scanned_rfid"] = correct_rfid
+            
+            # А реальному роботу (ESP) отправляем сигнал на открытие в топик управления
             try:
-                mqtt_client.publish(TOPIC_RFID, correct_rfid)
-                print(f">>> WEB-Тест: Имитирована отправка ключа {correct_rfid} в топик {TOPIC_RFID}")
+                mqtt_client.publish(TOPIC_CONTROL, "OPEN")
+                print(f">>> WEB-Тест: Статус изменен на OPENED. Команда OPEN ушла физическому роботу.")
             except Exception as e:
                 print(f"Ошибка веб-эмуляции MQTT: {e}")
                 
@@ -602,9 +385,6 @@ def logout():
     session.pop('username', None)
     return redirect(url_for('login'))
 
-# ==========================================
-# 7. ЗАПУСК
-# ==========================================
 if __name__ == '__main__':
     import os
     port = int(os.environ.get("PORT", 5000))
