@@ -29,7 +29,7 @@ MQTT_BROKER = "broker.hivemq.com"
 MQTT_PORT = 1883
 ROBOT_ID = "my_unique_robot_id_999"  # Должен быть одинаковым во Flask и на ESP!
 
-# Входящий топик: ESP отправляет сюда UID считанной/съэмулированной кнопки карты
+# Входящий топик: ESP отправляет сюда UID считанной/съэмулированной карты
 TOPIC_RFID = f"{ROBOT_ID}/rfid"
 # Исходящий топик: Flask отправляет сюда команды ("GO", "OPEN", "UID:...")
 TOPIC_CONTROL = f"{ROBOT_ID}/control"
@@ -59,7 +59,7 @@ def on_message(client, userdata, msg):
     payload = msg.payload.decode('utf-8').strip().upper()
     print(f"MQTT Получено сообщение в топик {msg.topic}: {payload}")
     
-    # Если пришла RFID-карта (или сигнал кнопки) и робот ждет на месте получателя
+    # Если пришел сигнал проверки ключа и робот ждет на месте получателя
     if msg.topic == TOPIC_RFID and delivery_status["stage"] == "waiting_card":
         delivery_status["scanned_rfid"] = payload
         
@@ -70,11 +70,11 @@ def on_message(client, userdata, msg):
         if recipient_user:
             correct_rfid = recipient_user.get("rfid", "").strip().upper()
             if payload == correct_rfid:
-                print(">>> RFID карта верна! Отправляем команду OPEN роботу...")
+                print(">>> Ключ доступа верен! Отправляем команду OPEN роботу...")
                 delivery_status["stage"] = "opened"
                 mqtt_client.publish(TOPIC_CONTROL, "OPEN")
             else:
-                print(f">>> Карта не совпала. Ждали: {correct_rfid}, получили: {payload}")
+                print(f">>> Ключ не совпал. Ожидалось: {correct_rfid}, получено: {payload}")
         else:
             print(f">>> Ошибка: получатель {recipient_name} не найден в БД!")
 
@@ -101,7 +101,7 @@ def simulate_travel():
         delivery_status["eta"] -= 1
     
     delivery_status["stage"] = "waiting_card"
-    print("Робот прибыл в пункт назначения. Ожидание RFID карты/кнопки...")
+    print("Робот прибыл в пункт назначения. Ожидание подтверждения доступа...")
 
 # ==========================================
 # 5. HTML ШАБЛОНЫ (ВСТРОЕННЫЕ)
@@ -170,8 +170,8 @@ REGISTER_HTML = """
         <form method="POST" action="/register">
             <input type="text" name="username" placeholder="Придумайте логин" required>
             <input type="password" name="password" placeholder="Придумайте пароль" required>
-            <input type="text" name="rfid" placeholder="UID RFID карты (необязательно)">
-            <span class="hint">Оставьте пустым для автогенерации карты!</span>
+            <input type="text" name="rfid" placeholder="Ключ доступа (необязательно)">
+            <span class="hint">Оставьте пустым для автогенерации ключа системы!</span>
             <button type="submit">Зарегистрироваться</button>
         </form>
         <div class="footer">
@@ -203,7 +203,6 @@ DASHBOARD_HTML = """
             margin: 0 auto; 
         }
         
-        /* ШАПКА С АДАПТИВНОСТЬЮ */
         .header { 
             display: flex; 
             justify-content: space-between; 
@@ -252,7 +251,6 @@ DASHBOARD_HTML = """
             font-size: 18px;
         }
         
-        /* АДАПТИВНЫЕ СТРОКИ С ДАННЫМИ */
         .info-row { 
             display: flex; 
             justify-content: space-between; 
@@ -297,6 +295,18 @@ DASHBOARD_HTML = """
         .btn-send:hover { 
             background: #0056b3; 
         }
+        .btn-claim {
+            background: #28a745;
+            color: white;
+            border: none;
+            font-size: 16px;
+            cursor: pointer;
+            margin-top: 15px;
+            font-weight: bold;
+        }
+        .btn-claim:hover {
+            background: #218838;
+        }
         .btn-reset { 
             background: #ffc107; 
             color: #212529; 
@@ -318,7 +328,6 @@ DASHBOARD_HTML = """
         .status-waiting { background: #fff3cd; color: #856404; }
         .status-opened { background: #d4edda; color: #155724; }
 
-        /* МОБИЛЬНЫЕ СТИЛИ (Для экранов узких мобильных устройств) */
         @media (max-width: 480px) {
             .header {
                 flex-direction: column;
@@ -358,10 +367,9 @@ DASHBOARD_HTML = """
         <div class="card">
             <h3>Ваши данные</h3>
             <div class="info-row">
-                <span class="info-label">Ваш RFID UID карты:</span>
+                <span class="info-label">Ваш уникальный ключ доступа:</span>
                 <span class="rfid-badge">{{ user_rfid }}</span>
             </div>
-            <p style="font-size: 13px; color: #666; margin-bottom: 0;">* Эту карту вы должны прикладывать к ESP (или использовать кнопку эмуляции), чтобы забрать деталь.</p>
         </div>
 
         <!-- КАРТОЧКА ОТПРАВКИ -->
@@ -408,8 +416,14 @@ DASHBOARD_HTML = """
                     </div>
                 {% elif stage == 'waiting_card' %}
                     <div class="status-box status-waiting">
-                        📍 Робот прибыл в пункт назначения! Приложите RFID карту или нажмите кнопку.
+                        📍 Робот прибыл в пункт назначения! Ожидание подтверждения.
                     </div>
+                    
+                    <!-- ТЕСТОВАЯ КНОПКА ЗАБРАТЬ ЗАКАЗ -->
+                    <form method="POST" action="/web_claim_order">
+                        <button type="submit" class="btn-claim">Забрать заказ (Имитировать RFID/Кнопку)</button>
+                    </form>
+                    
                 {% elif stage == 'opened' %}
                     <div class="status-box status-opened">
                         🔓 Доступ разрешен! Ячейка открыта, заберите деталь.
@@ -479,7 +493,7 @@ def register():
                 "rfid": rfid
             })
             
-            success_msg = f"Регистрация успешна! Ваша RFID карта: {rfid}"
+            success_msg = f"Регистрация успешна! Ваш ключ доступа: {rfid}"
             return render_template_string(LOGIN_HTML, success_msg=success_msg)
             
     return render_template_string(REGISTER_HTML, error=error)
@@ -519,7 +533,6 @@ def send_robot():
         sender = session['username']
         
         if recipient:
-            # Настройка параметров доставки
             delivery_status["active"] = True
             delivery_status["sender"] = sender
             delivery_status["recipient"] = recipient
@@ -527,26 +540,45 @@ def send_robot():
             delivery_status["eta"] = 10  
             delivery_status["scanned_rfid"] = None
             
-            # Находим RFID получателя в MongoDB
             recipient_user = users_collection.find_one({"username": recipient})
             recipient_rfid = recipient_user.get("rfid", "").strip().upper() if recipient_user else ""
 
             try:
-                # 1. Сначала отправляем на ESP UID карты получателя (в формате "UID:XX XX XX XX")
                 if recipient_rfid:
                     mqtt_client.publish(TOPIC_CONTROL, f"UID:{recipient_rfid}")
-                    print(f">>> MQTT: Отправили роботу целевой UID получателя: {recipient_rfid}")
+                    print(f">>> MQTT: Отправили роботу целевой ключ получателя: {recipient_rfid}")
                 
-                # 2. Отправляем команду начала движения
                 mqtt_client.publish(TOPIC_CONTROL, "GO")
                 print(f">>> MQTT: Отправлена команда 'GO' в топик {TOPIC_CONTROL}")
             except Exception as e:
                 print(f"Ошибка отправки MQTT: {e}")
             
-            # Запуск виртуального перемещения робота
             travel_thread = threading.Thread(target=simulate_travel)
             travel_thread.start()
             
+    return redirect(url_for('dashboard'))
+
+# МАРШРУТ ДЛЯ ИМИТАЦИИ СРАБАТЫВАНИЯ КЛЮЧА ИЗ ИНТЕРФЕЙСА
+@app.route('/web_claim_order', methods=['POST'])
+def web_claim_order():
+    if 'username' not in session:
+        return redirect(url_for('login'))
+        
+    global delivery_status
+    if delivery_status["active"] and delivery_status["stage"] == "waiting_card":
+        recipient_name = delivery_status["recipient"]
+        recipient_user = users_collection.find_one({"username": recipient_name})
+        
+        if recipient_user:
+            correct_rfid = recipient_user.get("rfid", "").strip().upper()
+            
+            # Имитируем, что робот сам отправил в MQTT-топик правильный ключ для открытия
+            try:
+                mqtt_client.publish(TOPIC_RFID, correct_rfid)
+                print(f">>> WEB-Тест: Имитирована отправка ключа {correct_rfid} в топик {TOPIC_RFID}")
+            except Exception as e:
+                print(f"Ошибка веб-эмуляции MQTT: {e}")
+                
     return redirect(url_for('dashboard'))
 
 @app.route('/reset_robot', methods=['POST'])
