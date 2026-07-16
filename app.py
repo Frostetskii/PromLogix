@@ -1,7 +1,7 @@
 import time
 import random
 import threading
-import os  # Добавили для безопасности
+import os
 from flask import Flask, request, redirect, url_for, session, render_template_string
 from pymongo import MongoClient
 import paho.mqtt.client as mqtt
@@ -12,8 +12,7 @@ app.secret_key = "super_secret_key_for_sessions"
 # ==========================================
 # 1. ПОДКЛЮЧЕНИЕ К ОБЛАЧНОЙ БД (MongoDB)
 # ==========================================
-# Безопасное подключение: берет URI из настроек Render. 
-# Если переменной нет (например, локально), берет запасную строку.
+# Берет URI из настроек Render. Если переменной нет, использует запасную строку.
 MONGO_URI = os.environ.get(
     "MONGO_URI", 
     "mongodb+srv://Kayott:163361@promlogix-u.9jbgo7r.mongodb.net/?appName=PromLogix-U"
@@ -102,13 +101,80 @@ def simulate_travel():
         delivery_status["eta"] -= 1
     
     delivery_status["stage"] = "waiting_card"
-    print("Робот прибыл в пункт назначения. Ожидание подтверждения доступа...")
+    print("Робот прибыл в пункт destination. Ожидание подтверждения доступа...")
 
 # ==========================================
-# 5. HTML ШАБЛОНЫ (ВСТРОЕННЫЕ)
+# 5. HTML ШАБЛОНЫ ИНТЕРФЕЙСА
 # ==========================================
-# ДОБАВЛЕНО: Теперь страница автоматически обновляется и на стадии 'opened', 
-# чтобы юзер сразу увидел открытую ячейку при эмуляции
+LOGIN_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Вход - PromLogix</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f4f6f9; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .card { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 100%; max-width: 400px; box-sizing: border-box; }
+        h2 { margin-top: 0; color: #333; text-align: center; }
+        input { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 16px; }
+        button { width: 100%; padding: 12px; background: #007bff; color: white; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #0056b3; }
+        .error { color: red; text-align: center; margin-bottom: 15px; font-weight: bold; }
+        .success { color: green; text-align: center; margin-bottom: 15px; font-weight: bold; }
+        .link { text-align: center; margin-top: 15px; font-size: 14px; }
+        .link a { color: #007bff; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>Вход в систему</h2>
+        {% if error %}<div class="error">{{ error }}</div>{% endif %}
+        {% if success_msg %}<div class="success">{{ success_msg }}</div>{% endif %}
+        <form method="POST" action="/login">
+            <input type="text" name="username" placeholder="Логин" required>
+            <input type="password" name="password" placeholder="Пароль" required>
+            <button type="submit">Войти</button>
+        </form>
+        <div class="link">Нет аккаунта? <a href="/register">Зарегистрироваться</a></div>
+    </div>
+</body>
+</html>
+"""
+
+REGISTER_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Регистрация - PromLogix</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f4f6f9; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .card { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 100%; max-width: 400px; box-sizing: border-box; }
+        h2 { margin-top: 0; color: #333; text-align: center; }
+        input { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 16px; }
+        button { width: 100%; padding: 12px; background: #28a745; color: white; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #218838; }
+        .error { color: red; text-align: center; margin-bottom: 15px; font-weight: bold; }
+        .link { text-align: center; margin-top: 15px; font-size: 14px; }
+        .link a { color: #007bff; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>Регистрация пользователя</h2>
+        {% if error %}<div class="error">{{ error }}</div>{% endif %}
+        <form method="POST" action="/register">
+            <input type="text" name="username" placeholder="Придумайте логин" required>
+            <input type="password" name="password" placeholder="Придумайте пароль" required>
+            <input type="text" name="rfid" placeholder="ID RFID-карты (необязательно)">
+            <button type="submit">Создать аккаунт</button>
+        </form>
+        <div class="link">Уже есть аккаунт? <a href="/login">Войти</a></div>
+    </div>
+</body>
+</html>
+"""
+
 DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html>
@@ -228,10 +294,6 @@ DASHBOARD_HTML = """
 </html>
 """
 
-# Вставьте сюда ваши неизмененные шаблоны LOGIN_HTML и REGISTER_HTML из вашего исходного кода...
-LOGIN_HTML = """..."""
-REGISTER_HTML = """..."""
-
 # ==========================================
 # 6. ВЕБ-МАРШРУТЫ (FLASK ROUTING)
 # ==========================================
@@ -336,7 +398,6 @@ def send_robot():
             
     return redirect(url_for('dashboard'))
 
-# ИСПРАВЛЕННЫЙ МАРШРУТ ЭМУЛЯЦИИ КНОПКИ КЛИКА
 @app.route('/web_claim_order', methods=['POST'])
 def web_claim_order():
     if 'username' not in session:
@@ -350,15 +411,14 @@ def web_claim_order():
         if recipient_user:
             correct_rfid = recipient_user.get("rfid", "").strip().upper()
             
-            # ИСПРАВЛЕНИЕ: Сразу жестко меняем стадию бэкенда на "opened"!
-            # Теперь при редиректе шаблон моментально увидит изменение статуса.
+            # Меняем стадию на бэкенде моментально до редиректа
             delivery_status["stage"] = "opened"
             delivery_status["scanned_rfid"] = correct_rfid
             
-            # А реальному роботу (ESP) отправляем сигнал на открытие в топик управления
+            # Передаем команду физическому устройству (ESP)
             try:
                 mqtt_client.publish(TOPIC_CONTROL, "OPEN")
-                print(f">>> WEB-Тест: Статус изменен на OPENED. Команда OPEN ушла физическому роботу.")
+                print(f">>> WEB-Тест: Статус изменен на OPENED. Команда OPEN отправлена роботу.")
             except Exception as e:
                 print(f"Ошибка веб-эмуляции MQTT: {e}")
                 
@@ -386,6 +446,5 @@ def logout():
     return redirect(url_for('login'))
 
 if __name__ == '__main__':
-    import os
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
