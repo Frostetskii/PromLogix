@@ -12,7 +12,7 @@ app.secret_key = "super_secret_key_for_sessions"
 # 1. ПОДКЛЮЧЕНИЕ К ОБЛАЧНОЙ БД (MongoDB)
 # ==========================================
 # Вставь сюда скопированную строку подключения из MongoDB Atlas!
-MONGO_URI = "mongodb+srv://Kayott:<163361>@promlogix-u.9jbgo7r.mongodb.net/?appName=PromLogix-U"
+MONGO_URI = "mongodb+srv://Kayott:163361@promlogix-u.9jbgo7r.mongodb.net/?appName=PromLogix-U"
 
 try:
     mongo_client = MongoClient(MONGO_URI)
