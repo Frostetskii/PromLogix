@@ -12,7 +12,6 @@ app.secret_key = "super_secret_key_for_sessions"
 # ==========================================
 # 1. ПОДКЛЮЧЕНИЕ К ОБЛАЧНОЙ БД (MongoDB)
 # ==========================================
-# Берет URI из настроек Render. Если переменной нет, использует запасную строку.
 MONGO_URI = os.environ.get(
     "MONGO_URI", 
     "mongodb+srv://Kayott:163361@promlogix-u.9jbgo7r.mongodb.net/?appName=PromLogix-U"
@@ -60,7 +59,7 @@ def on_message(client, userdata, msg):
     payload = msg.payload.decode('utf-8').strip().upper()
     print(f"MQTT Получено сообщение в топик {msg.topic}: {payload}")
     
-    # Физическое прикладывание карты у робота
+    # Физическое прикладывание карты у робота (через ESP)
     if msg.topic == TOPIC_RFID and delivery_status["stage"] == "waiting_card":
         delivery_status["scanned_rfid"] = payload
         
@@ -388,8 +387,15 @@ def send_robot():
 
             try:
                 if recipient_rfid:
+                    # Отправляем UID
                     mqtt_client.publish(TOPIC_CONTROL, f"UID:{recipient_rfid}")
+                    print(f">>> Отправлен UID получателя: {recipient_rfid}")
+                    # Задержка 0.5 секунды, чтобы ESP успел обработать сообщение
+                    time.sleep(0.5)
+                
+                # Даем команду ехать
                 mqtt_client.publish(TOPIC_CONTROL, "GO")
+                print(">>> Отправлена команда GO")
             except Exception as e:
                 print(f"Ошибка отправки MQTT: {e}")
             
@@ -411,11 +417,9 @@ def web_claim_order():
         if recipient_user:
             correct_rfid = recipient_user.get("rfid", "").strip().upper()
             
-            # Меняем стадию на бэкенде моментально до редиректа
             delivery_status["stage"] = "opened"
             delivery_status["scanned_rfid"] = correct_rfid
             
-            # Передаем команду физическому устройству (ESP)
             try:
                 mqtt_client.publish(TOPIC_CONTROL, "OPEN")
                 print(f">>> WEB-Тест: Статус изменен на OPENED. Команда OPEN отправлена роботу.")
@@ -438,6 +442,14 @@ def reset_robot():
         "eta": 0,
         "scanned_rfid": None
     }
+    
+    # Отправляем сигнал сброса на ESP, чтобы очистить кэш RFID
+    try:
+        mqtt_client.publish(TOPIC_CONTROL, "RESET")
+        print(">>> Отправлена команда RESET на робота")
+    except Exception as e:
+        print(f"Ошибка отправки MQTT RESET: {e}")
+        
     return redirect(url_for('dashboard'))
 
 @app.route('/logout')
