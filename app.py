@@ -26,14 +26,15 @@ except Exception as e:
     print(f"Ошибка подключения к MongoDB: {e}")
 
 # ==========================================
-# 2. НАСТРОЙКИ MQTT И СТАТУС РОБОТА
+# 2. НАСТРОЙКИ MQTT (УПРОЩЕННЫЕ И НАДЕЖНЫЕ)
 # ==========================================
-MQTT_BROKER = "broker.hivemq.com"
+# Меняем брокер на Mosquitto для стабильности
+MQTT_BROKER = "test.mosquitto.org"
 MQTT_PORT = 1883
-ROBOT_ID = "my_unique_robot_id_999"
 
-TOPIC_RFID = f"{ROBOT_ID}/rfid"
-TOPIC_CONTROL = f"{ROBOT_ID}/control"
+# Жестко прописываем уникальные топики без динамических переменных в коде
+TOPIC_RFID = "promlogix/robot999/rfid"
+TOPIC_CONTROL = "promlogix/robot999/control"
 
 delivery_status = {
     "active": False,
@@ -47,19 +48,20 @@ delivery_status = {
 # ==========================================
 # 3. НАСТРОЙКА MQTT-КЛИЕНТА НА СЕРВЕРЕ
 # ==========================================
-mqtt_client = mqtt.Client()
+# Генерируем уникальный Client ID для Flask-сервера
+server_client_id = f"promlogix_server_{random.randint(1000, 9999)}"
+mqtt_client = mqtt.Client(client_id=server_client_id)
 
 def on_connect(client, userdata, flags, rc):
-    print(f"Flask-сервер подключен к MQTT брокеру с кодом: {rc}")
+    print(f"Flask-сервер подключен к Mosquitto (Код: {rc}) с ID: {server_client_id}")
     client.subscribe(TOPIC_RFID)
-    print(f"Подписались на топик: {TOPIC_RFID}")
+    print(f"Успешно подписались на топик: {TOPIC_RFID}")
 
 def on_message(client, userdata, msg):
     global delivery_status
     payload = msg.payload.decode('utf-8').strip().upper()
     print(f"MQTT Получено сообщение в топик {msg.topic}: {payload}")
     
-    # Физическое прикладывание карты у робота (через ESP)
     if msg.topic == TOPIC_RFID and delivery_status["stage"] == "waiting_card":
         delivery_status["scanned_rfid"] = payload
         
@@ -71,7 +73,10 @@ def on_message(client, userdata, msg):
             if payload == correct_rfid:
                 print(">>> Ключ доступа верен! Отправляем команду OPEN роботу...")
                 delivery_status["stage"] = "opened"
-                mqtt_client.publish(TOPIC_CONTROL, "OPEN")
+                
+                # Публикуем команду OPEN
+                res = mqtt_client.publish(TOPIC_CONTROL, "OPEN")
+                print(f"Результат отправки OPEN: {res.rc} (0 - успешно)")
             else:
                 print(f">>> Ключ не совпал. Ожидалось: {correct_rfid}, получено: {payload}")
         else:
@@ -81,11 +86,14 @@ mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
 
 def start_mqtt():
-    try:
-        mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
-        mqtt_client.loop_forever()
-    except Exception as e:
-        print(f"Не удалось подключиться к MQTT: {e}")
+    while True:
+        try:
+            print(f"Попытка подключения Flask к брокеру {MQTT_BROKER}...")
+            mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
+            mqtt_client.loop_forever()
+        except Exception as e:
+            print(f"Ошибка MQTT-потока: {e}. Переподключение через 5 секунд...")
+            time.sleep(5)
 
 mqtt_thread = threading.Thread(target=start_mqtt, daemon=True)
 mqtt_thread.start()
@@ -100,7 +108,7 @@ def simulate_travel():
         delivery_status["eta"] -= 1
     
     delivery_status["stage"] = "waiting_card"
-    print("Робот прибыл в пункт destination. Ожидание подтверждения доступа...")
+    print("Робот прибыл в пункт назначения. Ожидание подтверждения доступа...")
 
 # ==========================================
 # 5. HTML ШАБЛОНЫ ИНТЕРФЕЙСА
@@ -387,17 +395,15 @@ def send_robot():
 
             try:
                 if recipient_rfid:
-                    # Отправляем UID
-                    mqtt_client.publish(TOPIC_CONTROL, f"UID:{recipient_rfid}")
-                    print(f">>> Отправлен UID получателя: {recipient_rfid}")
-                    # Задержка 0.5 секунды, чтобы ESP успел обработать сообщение
-                    time.sleep(0.5)
+                    # Отправляем UID на Mosquitto
+                    res_uid = mqtt_client.publish(TOPIC_CONTROL, f"UID:{recipient_rfid}")
+                    print(f">>> Отправлен UID получателя ({recipient_rfid}). Код отправки: {res_uid.rc}")
+                    time.sleep(0.5) # Пауза перед следующей командой
                 
-                # Даем команду ехать
-                mqtt_client.publish(TOPIC_CONTROL, "GO")
-                print(">>> Отправлена команда GO")
+                res_go = mqtt_client.publish(TOPIC_CONTROL, "GO")
+                print(f">>> Отправлена команда GO. Код отправки: {res_go.rc}")
             except Exception as e:
-                print(f"Ошибка отправки MQTT: {e}")
+                print(f"Ошибка отправки MQTT при старте: {e}")
             
             travel_thread = threading.Thread(target=simulate_travel)
             travel_thread.start()
@@ -416,13 +422,12 @@ def web_claim_order():
         
         if recipient_user:
             correct_rfid = recipient_user.get("rfid", "").strip().upper()
-            
             delivery_status["stage"] = "opened"
             delivery_status["scanned_rfid"] = correct_rfid
             
             try:
-                mqtt_client.publish(TOPIC_CONTROL, "OPEN")
-                print(f">>> WEB-Тест: Статус изменен на OPENED. Команда OPEN отправлена роботу.")
+                res_open = mqtt_client.publish(TOPIC_CONTROL, "OPEN")
+                print(f">>> Отправлен OPEN с веба. Код отправки: {res_open.rc}")
             except Exception as e:
                 print(f"Ошибка веб-эмуляции MQTT: {e}")
                 
@@ -443,10 +448,9 @@ def reset_robot():
         "scanned_rfid": None
     }
     
-    # Отправляем сигнал сброса на ESP, чтобы очистить кэш RFID
     try:
-        mqtt_client.publish(TOPIC_CONTROL, "RESET")
-        print(">>> Отправлена команда RESET на робота")
+        res_reset = mqtt_client.publish(TOPIC_CONTROL, "RESET")
+        print(f">>> Отправлен RESET на робота. Код отправки: {res_reset.rc}")
     except Exception as e:
         print(f"Ошибка отправки MQTT RESET: {e}")
         
